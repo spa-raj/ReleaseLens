@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Raw plan files
+MVP_PLAN_LLMZ_CAPSTONE_ARIZE_v1.md
