@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/smart-release-advisor.iml" filepath="$PROJECT_DIR$/.idea/smart-release-advisor.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/ReleaseLens.iml" filepath="$PROJECT_DIR$/.idea/ReleaseLens.iml" />
     </modules>
   </component>
 </project>
