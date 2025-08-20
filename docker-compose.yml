@@ -1,0 +1,182 @@
+# ReleaseLens Development Environment
+# Docker Compose configuration for local development with Celery + Redis
+
+version: '3.8'
+
+services:
+  # FastAPI Application Server
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - QDRANT_URL=http://qdrant:6333
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./runs:/app/runs
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - releaselens
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    environment:
+      - ENVIRONMENT=development
+      - QDRANT_URL=http://qdrant:6333
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_WORKER_CONCURRENCY=4
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./runs:/app/runs
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - releaselens
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "celery", "-A", "worker.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Celery Beat (Task Scheduler)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    command: celery -A worker.celery_app beat --loglevel=info
+    environment:
+      - ENVIRONMENT=development
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - releaselens
+    restart: unless-stopped
+
+  # Redis - Message Broker for Celery
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - releaselens
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # Qdrant - Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"  # gRPC port
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - releaselens
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+
+  # Flower - Celery Monitoring (Development)
+  flower:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    command: celery -A worker.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    networks:
+      - releaselens
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Arize Phoenix - Local Observability
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"  # gRPC port for OTLP
+    environment:
+      - PHOENIX_HOST=0.0.0.0
+      - PHOENIX_PORT=6006
+      - PHOENIX_GRPC_PORT=4317
+    volumes:
+      - phoenix_data:/phoenix/data
+    networks:
+      - releaselens
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Named volumes for data persistence
+volumes:
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  phoenix_data:
+    driver: local
+
+# Custom network for service communication
+networks:
+  releaselens:
+    driver: bridge

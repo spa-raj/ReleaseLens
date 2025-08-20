@@ -1,0 +1,161 @@
+# ReleaseLens Production Environment
+# Docker Compose configuration for production deployment
+
+version: '3.8'
+
+services:
+  # FastAPI Application Server
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+      target: base
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - QDRANT_URL=http://qdrant:6333
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env.prod
+    volumes:
+      - ./runs:/app/runs:rw
+      - ./logs:/app/logs:rw
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - releaselens
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    environment:
+      - ENVIRONMENT=production
+      - QDRANT_URL=http://qdrant:6333
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_WORKER_CONCURRENCY=4
+    env_file:
+      - .env.prod
+    volumes:
+      - ./runs:/app/runs:rw
+      - ./logs:/app/logs:rw
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - releaselens
+    restart: always
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Celery Beat (Task Scheduler)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    command: uv run celery -A worker.celery_app beat --loglevel=info
+    environment:
+      - ENVIRONMENT=production
+      - BROKER_URL=redis://redis:6379/0
+      - RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - .env.prod
+    volumes:
+      - ./logs:/app/logs:rw
+    depends_on:
+      - redis
+    networks:
+      - releaselens
+    restart: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+
+  # Redis - Message Broker for Celery
+  redis:
+    image: redis:latest
+    volumes:
+      - redis_data:/data
+    networks:
+      - releaselens
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.25'
+    command: redis-server --appendonly yes --maxmemory 1g --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Qdrant - Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - releaselens
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '0.5'
+        reservations:
+          memory: 1G
+          cpus: '0.25'
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Named volumes for data persistence
+volumes:
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+
+# Custom network for service communication
+networks:
+  releaselens:
+    driver: bridge
