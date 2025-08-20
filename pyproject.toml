@@ -193,3 +193,19 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.bandit]
+exclude_dirs = ["tests", "scripts"]
+skips = [
+    "B101",  # assert_used - we use asserts in tests
+    "B601",  # paramiko_calls - we may use paramiko for git operations
+    "B602",  # subprocess_popen_with_shell_equals_true - needed for some git commands
+]
+
+[tool.pydocstyle]
+convention = "google"
+match-dir = "(?!tests).*"
+add-ignore = [
+    "D100",  # Missing docstring in public module
+    "D104",  # Missing docstring in public package
+]
